@@ -1,7 +1,9 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { stringToHex, chunkToUtf8String, getRandomIDPro } = require('./utils.js');
+const { models } = require('./models.js');
 const app = express();
+require('dotenv').config();
 
 // 中间件配置
 app.use(express.json());
@@ -19,20 +21,26 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, stream = false } = req.body;
     let authToken = req.headers.authorization?.replace('Bearer ', '');
+    let workosCursorSessionTokens = process.env.WorkosCursorSessionTokens;
     // 处理逗号分隔的密钥
-    const keys = authToken.split(',').map((key) => key.trim());
+    const keys = workosCursorSessionTokens.split(',').map((key) => key.trim());
     if (keys.length > 0) {
       // 确保 currentKeyIndex 不会越界
       if (currentKeyIndex >= keys.length) {
         currentKeyIndex = 0;
       }
       // 使用当前索引获取密钥
-      authToken = keys[currentKeyIndex];
+      workosCursorSessionTokens = keys[currentKeyIndex];
     }
-    if (authToken && authToken.includes('%3A%3A')) {
-      authToken = authToken.split('%3A%3A')[1];
+    if (workosCursorSessionTokens && workosCursorSessionTokens.includes('%3A%3A')) {
+      workosCursorSessionTokens = workosCursorSessionTokens.split('%3A%3A')[1];
     }
-    if (!messages || !Array.isArray(messages) || messages.length === 0 || !authToken) {
+    if(authToken !== process.env.AUTH_TOKEN){
+      return res.status(400).json({
+        error: 'Invalid authorization.',
+      });
+    }
+    if (!messages || !Array.isArray(messages) || messages.length === 0 || !workosCursorSessionTokens) {
       return res.status(400).json({
         error: 'Invalid request. Messages should be a non-empty array and authorization is required',
       });
@@ -43,19 +51,19 @@ app.post('/v1/chat/completions', async (req, res) => {
     // 获取checksum，req header中传递优先，环境变量中的等级第二，最后随机生成
     const checksum =
       req.headers['x-cursor-checksum'] ??
-      process.env['x-cursor-checksum'] ??
+      process.env.X_CURSOR_CHECKSUM ??
       `zo${getRandomIDPro({ dictType: 'max', size: 6 })}${getRandomIDPro({ dictType: 'max', size: 64 })}/${getRandomIDPro({ dictType: 'max', size: 64 })}`;
 
     const response = await fetch('https://api2.cursor.sh/aiserver.v1.AiService/StreamChat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/connect+proto',
-        authorization: `Bearer ${authToken}`,
+        authorization: `Bearer ${workosCursorSessionTokens}`,
         'connect-accept-encoding': 'gzip,br',
         'connect-protocol-version': '1',
         'user-agent': 'connect-es/1.4.0',
         'x-amzn-trace-id': `Root=${uuidv4()}`,
-        'x-cursor-checksum': checksum,
+        'x-cursor-checksum': `${checksum}`,
         'x-cursor-client-version': '0.42.3',
         'x-cursor-timezone': 'Asia/Shanghai',
         'x-ghost-mode': 'false',
@@ -143,7 +151,18 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
   }
 });
-
+// 获取 models
+app.get('/v1/models', (req, res) => {
+  res.json({
+    object: "list",
+    data: Object.keys(models).map(model => ({
+      id: model,
+      object: "model",
+      created: 1706745938,
+      owned_by: "cursor"
+    }))
+  })
+});
 // 启动服务器
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
